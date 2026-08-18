@@ -1,15 +1,61 @@
 <script lang="ts">
-  let containerElement: HTMLDivElement;
+  import { onMount } from "svelte";
+
+  const MASKED_BOX_NAME_PREFIX = "password-";
+  const NEXT_STEP_BUTTON_TAG = "ing-button";
+  const PAGE_STATE_CHECK_INTERVAL = 500;
+  // Grace period, so that the panel survives the reload between the two login steps.
+  const CHECKS_WITHOUT_LOGIN_FORM_BEFORE_HIDING = 6;
+
   let loginElement: HTMLInputElement;
   let passwordElement: HTMLInputElement;
-  let isHidden = false;
+  let isCollapsed = false;
+  let hasSeenLoginForm = false;
+  let checksWithoutLoginForm = 0;
 
-  const t = (translationKey: string): string => {
-    return chrome.i18n.getMessage(translationKey) ?? translationKey;
+  // The content script covers the whole /mojeing/app/* space, which includes the banking app
+  // itself - show the panel only around a login form, never on top of the logged-in app.
+  $: isVisible = hasSeenLoginForm && checksWithoutLoginForm < CHECKS_WITHOUT_LOGIN_FORM_BEFORE_HIDING;
+
+  onMount(() => {
+    checkPageState();
+
+    const interval = setInterval(checkPageState, PAGE_STATE_CHECK_INTERVAL);
+
+    return () => clearInterval(interval);
+  });
+
+  const checkPageState = () => {
+    if (findLoginFormInput()) {
+      hasSeenLoginForm = true;
+      checksWithoutLoginForm = 0;
+      return;
+    }
+
+    if (checksWithoutLoginForm >= CHECKS_WITHOUT_LOGIN_FORM_BEFORE_HIDING) return;
+
+    ++checksWithoutLoginForm;
+
+    // The login form is gone for good - the user is either inside the banking app or somewhere
+    // else entirely, so drop what they typed.
+    if (checksWithoutLoginForm === CHECKS_WITHOUT_LOGIN_FORM_BEFORE_HIDING && hasSeenLoginForm) {
+      clearCredentials();
+    }
   };
 
-  const goToNextLoginStep = (form: HTMLFormElement) => {
-    const nextStepButton = getButtonByTagName("ing-button", form) as HTMLButtonElement;
+  // Either the first login step (username) or the second one (masked password boxes).
+  const findLoginFormInput = (): Element | null =>
+    getInputByNameAttribute("login") ?? getInputByNameAttribute(`${MASKED_BOX_NAME_PREFIX}0`);
+
+  const clearCredentials = () => {
+    loginElement.value = "";
+    passwordElement.value = "";
+  };
+
+  const t = (translationKey: string): string => chrome.i18n.getMessage(translationKey) || translationKey;
+
+  const goToNextLoginStep = () => {
+    const nextStepButton = getButtonByTagName(NEXT_STEP_BUTTON_TAG) as HTMLButtonElement | null;
 
     nextStepButton?.click();
   };
@@ -26,93 +72,55 @@
   };
 
   const onLoginFill = () => {
-    const loginInput = getInputByNameAttribute("login") as HTMLInputElement;
+    const loginInput = getInputByNameAttribute("login") as HTMLInputElement | null;
     const login = loginElement.value;
 
-    if (loginInput && login?.length > 0) {
-      fillInput(loginInput, login);
-      goToNextLoginStep(loginInput.form);
-    }
+    if (!loginInput || login.length === 0) return;
+
+    fillInput(loginInput, login);
+    goToNextLoginStep();
   };
 
   const onPasswordFill = () => {
-    const maskedBoxIdPrefix = "pin-";
-    const passwordCharaters = passwordElement.value.split("");
-    let form: HTMLFormElement | null = null;
-    let i = 1;
+    const passwordCharacters = passwordElement.value.split("");
+    let hasFilledAnyBox = false;
 
-    while (true) {
-      const maskedBox = getInputByNameAttribute(`${maskedBoxIdPrefix}${i}`) as HTMLInputElement;
+    for (let i = 0; i < passwordCharacters.length; ++i) {
+      const maskedBox = getInputByNameAttribute(`${MASKED_BOX_NAME_PREFIX}${i}`) as HTMLInputElement | null;
 
-      if (!maskedBox || i > passwordCharaters.length) break;
+      if (!maskedBox) break;
 
       if (!maskedBox.disabled) {
-        fillInput(maskedBox, passwordCharaters[i - 1]);
-        form = maskedBox.form;
+        fillInput(maskedBox, passwordCharacters[i]);
+        hasFilledAnyBox = true;
       }
-
-      ++i;
     }
 
-    if (form) {
-      goToNextLoginStep(form);
-      onPasswordFilled();
-    }
+    if (!hasFilledAnyBox) return;
+
+    // Credentials are wiped by checkPageState as soon as the banking app shows up.
+    isCollapsed = true;
+    goToNextLoginStep();
   };
 
-  const onPasswordFilled = () => {
-    isHidden = true;
+  const getInputByNameAttribute = (name: string): Element | null =>
+    findElementRecursive(
+      (e) => e.localName === "input" && e.attributes.getNamedItem("name")?.value === name,
+      document.body
+    );
 
-    const checkIfSuccessfullLoginInterval = 500;
-    const checkIfSuccessfullLoginTimeout = 30 * checkIfSuccessfullLoginInterval;
-
-    const interval = setInterval(() => {
-      const contentElement = document.getElementById("content-region");
-
-      if (contentElement?.classList.contains("main-content-region")) {
-        fillInput(loginElement, "");
-        fillInput(passwordElement, "");
-        clearInterval(interval);
-      }
-    }, checkIfSuccessfullLoginInterval);
-
-    setTimeout(() => {
-      clearInterval(interval);
-    }, checkIfSuccessfullLoginTimeout);
-  };
-
-  const getInputByNameAttribute = (name: string): Element | null => {
-    const test = (e: Element) => {
-      const tagName = e.localName;
-      const nameAttribute = e.attributes.getNamedItem("name")?.value;
-
-      return tagName === "input" && nameAttribute == name;
-    };
-
-    return findElementRecursive(test, document.body);
-  };
-
-  const getButtonByTagName = (name: string, parent: Element = document.body): Element | null => {
-    const test = (e: Element) => {
-      const tagName = e.localName;
-      const roleAttribute = e.attributes.getNamedItem("role")?.value;
-
-      return tagName === name && roleAttribute == "button";
-    };
-
-    return findElementRecursive(test, parent);
-  };
+  const getButtonByTagName = (tagName: string): Element | null =>
+    findElementRecursive(
+      (e) => e.localName === tagName && e.attributes.getNamedItem("role")?.value === "button",
+      document.body
+    );
 
   const findElementRecursive = (test: (e: Element) => boolean, element: Element): Element | null => {
     if (test(element)) return element;
 
-    for (const child of element.children) {
-      const foundChild = findElementRecursive(test, child);
+    const children = [...element.children, ...(element.shadowRoot?.children ?? [])];
 
-      if (foundChild) return foundChild;
-    }
-
-    for (const child of element.shadowRoot?.children ?? []) {
+    for (const child of children) {
       const foundChild = findElementRecursive(test, child);
 
       if (foundChild) return foundChild;
@@ -122,8 +130,8 @@
   };
 </script>
 
-<div bind:this={containerElement} class="mpf-background" class:mpf-hidden={isHidden}>
-  <button class="mpf-toggle" on:click={() => (isHidden = !isHidden)}>
+<div class="mpf-background" class:mpf-collapsed={isCollapsed} class:mpf-gone={!isVisible}>
+  <button class="mpf-toggle" on:click={() => (isCollapsed = !isCollapsed)}>
     <i class="mpf-arrow mpf-downleft" />
   </button>
   <div class="mpf-content">
@@ -162,14 +170,20 @@
     transition: transform 0.3s ease-out;
   }
 
-  .mpf-hidden {
+  .mpf-collapsed {
     transform: translate(
       calc(var(--toggle-size) - var(--visible-circle-size) / var(--root-2)),
       calc(var(--visible-circle-size) / var(--root-2) - var(--toggle-size))
     );
   }
 
-  .mpf-hidden .mpf-downleft {
+  // Not the login screen - the panel stays mounted (it keeps the typed credentials between
+  // login steps) but must not cover the banking app.
+  .mpf-gone {
+    display: none;
+  }
+
+  .mpf-collapsed .mpf-downleft {
     transform: rotate(270deg);
     -webkit-transform: rotate(270deg);
   }

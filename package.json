@@ -1,6 +1,6 @@
 {
   "name": "ing-password-filler",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "private": true,
   "repository": {
     "type": "git",
@@ -10,24 +10,21 @@
     "build": "rollup -c",
     "validate": "svelte-check",
     "dist": "npm run build && npm run pre-create-dist && npm run create-dist",
-    "pre-create-dist": "rm -f \"dist/password-filler-$npm_package_version.zip\" && rm -f public/**/*.map",
+    "pre-create-dist": "rm -f \"dist/password-filler-$npm_package_version.zip\" && rm -f public/build/*.map",
     "create-dist": "cd public && zip -r \"../dist/password-filler-$npm_package_version.zip\" *",
     "dev-dist": "npm run build && npm run dev-pre-create-dist && npm run create-dist && npm run dev-unzip",
     "dev-pre-create-dist": "rm -f \"dist/password-filler-$npm_package_version.zip\" && rm -rf \"dist/password-filler-$npm_package_version\"",
     "dev-unzip": "cd dist && unzip \"password-filler-$npm_package_version.zip\" -d \"password-filler-$npm_package_version\"",
-    "sync-manifest-version": "jq --arg version $npm_package_version '.version=$version' public/manifest.json > public/manifest.json.new && mv public/manifest.json.new public/manifest.json",
+    "sync-manifest-version": "node scripts/sync-manifest-version.js",
     "version": "npm run sync-manifest-version && git add public/manifest.json"
   },
   "devDependencies": {
-    "@rollup/plugin-commonjs": "^17.0.0",
     "@rollup/plugin-node-resolve": "^11.0.0",
     "@rollup/plugin-typescript": "^8.0.0",
     "@tsconfig/svelte": "^1.0.0",
     "@types/chrome": "0.0.143",
-    "node-jq": "^2.3.5",
     "rollup": "^2.3.4",
     "rollup-plugin-css-only": "^3.1.0",
-    "rollup-plugin-livereload": "^2.0.0",
     "rollup-plugin-svelte": "^7.0.0",
     "rollup-plugin-terser": "^7.0.0",
     "sass": "^1.34.0",
@@ -36,8 +33,5 @@
     "svelte-preprocess": "^4.7.3",
     "tslib": "^2.0.0",
     "typescript": "^4.0.0"
-  },
-  "dependencies": {
-    "sirv-cli": "^1.0.0"
   }
 }
